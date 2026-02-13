@@ -232,3 +232,97 @@ if uploaded_file_a and uploaded_file_b:
 else:
     st.info("👈 Silakan upload file MB51 dan Mapping Line di sidebar untuk memulai.")
 
+
+
+        # --- FRONTEND: INPUT MANUAL (REVISI: PASTE BEBAS) ---
+        st.subheader("📝 Input Data Manual (Paste dari Excel)")
+        st.info("Cara Pakai: Blok data di Excel Anda (termasuk Header Material & Nama Line) -> Copy -> Paste di bawah ini.")
+
+        # 1. Kotak untuk Paste
+        paste_data = st.text_area("Paste Data Excel di sini:", height=200, placeholder="Contoh:\nLine\t40001\t40002\nLine 01\t100\t50...")
+
+        if paste_data:
+            # 2. Konversi Teks Paste menjadi Data Frame
+            from io import StringIO
+            try:
+                # Excel saat di-copy menjadi format "Tab Separated Values" (sep='\t')
+                df_manual_raw = pd.read_csv(StringIO(paste_data), sep='\t')
+                
+                # Asumsi: Kolom pertama adalah Line, Kolom sisanya adalah Material
+                # Kita ubah nama kolom pertama jadi 'Line' agar aman
+                first_col = df_manual_raw.columns[0]
+                df_manual_raw.rename(columns={first_col: 'Line'}, inplace=True)
+
+                # Tampilkan preview agar user yakin datanya benar
+                with st.expander("Klik untuk cek hasil bacaan data manual"):
+                    st.dataframe(df_manual_raw)
+
+                # 3. Transformasi (Unpivot) Data Manual
+                # Mengubah tabel lebar (banyak kolom material) menjadi tabel panjang (Line | Material | Qty)
+                manual_long = pd.melt(
+                    df_manual_raw, 
+                    id_vars=['Line'], 
+                    var_name='Material', 
+                    value_name='Qty_Manual'
+                )
+
+                # Bersihkan data (hapus koma/titik jika ada, pastikan angka)
+                manual_long['Qty_Manual'] = pd.to_numeric(manual_long['Qty_Manual'], errors='coerce').fillna(0)
+                
+                # Pastikan format teks sama dengan SAP
+                manual_long['Material'] = manual_long['Material'].astype(str).str.strip()
+                manual_long['Line'] = manual_long['Line'].astype(str).str.strip()
+
+                # --- LANJUT KE PROSES COMPARE (LOGIKA SAMA SEPERTI SEBELUMNYA) ---
+                
+                if st.button("🚀 Proses Compare", type="primary"):
+                    
+                    # Join Data SAP vs Manual
+                    final_df = pd.merge(
+                        sap_grouped, 
+                        manual_long, 
+                        on=['Line', 'Material'], 
+                        how='outer'
+                    )
+
+                    # Isi NaN dengan 0
+                    final_df['Qty_SAP'] = final_df['Qty_SAP'].fillna(0)
+                    final_df['Qty_Manual'] = final_df['Qty_Manual'].fillna(0)
+                    
+                    # Kategori Line
+                    final_df['Kategori'] = final_df['Kategori'].fillna(final_df['Line'].apply(categorize_line))
+                    
+                    # Hitung Selisih
+                    final_df['Selisih'] = final_df['Qty_SAP'] - final_df['Qty_Manual']
+
+                    # Filter Tampilan (Hanya kolom penting)
+                    final_cols = ['Line', 'Kategori', 'Material', 'Qty_SAP', 'Qty_Manual', 'Selisih']
+                    final_display = final_df[final_cols].sort_values(by=['Kategori', 'Line', 'Material'])
+
+                    st.subheader("✅ Hasil Rekonsiliasi")
+
+                    # Fungsi Warna (Merah jika selisih)
+                    def highlight_diff(row):
+                        if abs(row['Selisih']) > 0.001: 
+                            return ['background-color: #ffcccc; color: black'] * len(row)
+                        else:
+                            return [''] * len(row)
+
+                    st.dataframe(
+                        final_display.style.apply(highlight_diff, axis=1)
+                        .format("{:,.2f}", subset=['Qty_SAP', 'Qty_Manual', 'Selisih']),
+                        use_container_width=True,
+                        height=600
+                    )
+                    
+                    # Metric Summary
+                    st.metric("Total Selisih", f"{final_display['Selisih'].sum():,.2f}")
+
+            except Exception as e:
+                st.error("Gagal membaca data paste. Pastikan Anda meng-copy tabel Excel dengan benar.")
+                st.error(f"Error detail: {e}")
+        
+        else:
+            st.warning("Silakan paste data Excel Anda di kotak di atas.")
+
+
