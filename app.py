@@ -32,7 +32,8 @@ def clean_indo_number(x):
 def read_paste_data(text_input):
     if not text_input: return None
     try:
-        return pd.read_csv(StringIO(text_input), sep='\t')
+        # Gunakan engine python agar lebih robust menangani error baris
+        return pd.read_csv(StringIO(text_input), sep='\t', engine='python')
     except Exception: return None
 
 def get_last_two_words(text):
@@ -60,7 +61,7 @@ def categorize_line(line_name):
     return "BS Depan" if match else "BS Belakang"
 
 # --- 4. JUDUL ---
-st.title("⚡ SAP Reconcile: Final Precision Fix")
+st.title("⚡ SAP Reconcile: Final Stable Version")
 st.markdown("---")
 
 # --- 5. AREA INPUT ---
@@ -86,13 +87,17 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         st.stop()
 
     try:
-        # BACA DATA SAP NORMAL
+        # BACA DATA
         df_mb51 = read_paste_data(txt_mb51)
         df_mapping = read_paste_data(txt_mapping)
         
-        # BACA DATA MANUAL
+        # BACA DATA MANUAL (Tanpa engine python agar duplicate cols terhandle otomatis)
         raw_manual_io = StringIO(txt_manual)
         df_manual_raw = pd.read_csv(raw_manual_io, sep='\t')
+
+        if df_manual_raw is None or df_manual_raw.empty:
+            st.error("Gagal membaca Data Manual. Pastikan Anda meng-copy tabel dengan benar.")
+            st.stop()
 
         # --- DETEKSI KOLOM SAP ---
         col_mat = find_column(df_mb51, ['Material', 'Material Number'])
@@ -137,41 +142,39 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         sap_grouped.rename(columns={'Qty': 'Qty_SAP'}, inplace=True)
         sap_grouped['Kategori'] = sap_grouped['Line'].apply(categorize_line)
 
-        # --- CLEANING DATA MANUAL (PERBAIKAN LOGIKA DISINI) ---
+        # --- CLEANING DATA MANUAL (SAFE MODE) ---
         
-        # 1. Cari Kolom Line dulu
+        # 1. Cari Kolom Line (Metode Rename Aman)
         found_line_col = False
-        for i, col in enumerate(df_manual_raw.columns):
+        target_col_name = None
+        
+        for col in df_manual_raw.columns:
             if 'line' in col.lower():
-                cols = list(df_manual_raw.columns)
-                cols[i] = 'Line'
-                df_manual_raw.columns = cols
-                found_line_col = True
+                target_col_name = col
                 break
         
-        if not found_line_col:
-            cols = list(df_manual_raw.columns)
-            if len(cols) > 1:
-                cols[1] = 'Line'
-                df_manual_raw.columns = cols
+        if target_col_name:
+            df_manual_raw = df_manual_raw.rename(columns={target_col_name: 'Line'})
+        else:
+            # Fallback: Ambil kolom ke-2 jika ada
+            if len(df_manual_raw.columns) > 1:
+                col_at_index_1 = df_manual_raw.columns[1]
+                df_manual_raw = df_manual_raw.rename(columns={col_at_index_1: 'Line'})
             else:
-                st.error("Gagal mendeteksi kolom Line di data manual.")
+                st.error("Gagal mendeteksi kolom 'Line' di Data Manual. Pastikan ada header 'Line'.")
                 st.stop()
 
         # 2. Set Index Line
         df_manual_raw = df_manual_raw.set_index('Line')
         
-        # 3. Siapkan "Kunci Grouping" (Membersihkan suffix .1, .2 TANPA rename dataframe dulu)
-        # Ini mencegah duplikasi data saat selection
+        # 3. Kunci Grouping (Membersihkan suffix .1, .2)
         group_keys = [re.sub(r'\.\d+$', '', col) for col in df_manual_raw.columns]
         
         # 4. Konversi ke Angka
         df_manual_numeric = df_manual_raw.applymap(clean_indo_number).fillna(0)
         
-        # 5. Group by Keys (Jumlahkan kolom berdasarkan nama bersihnya)
+        # 5. Group by Keys
         df_manual_grouped = df_manual_numeric.groupby(group_keys, axis=1).sum()
-        
-        # Reset Index
         df_manual_grouped = df_manual_grouped.reset_index()
 
         # 6. Unpivot
@@ -185,13 +188,13 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         final_df['Qty_Manual'] = final_df['Qty_Manual'].fillna(0)
         final_df['Kategori'] = final_df['Kategori'].fillna(final_df['Line'].apply(categorize_line))
         
-        # Toleransi float (pembulatan 2 desimal agar 0.000001 tidak dianggap selisih)
+        # Hitung Selisih
         final_df['Qty_SAP'] = final_df['Qty_SAP'].round(3)
         final_df['Qty_Manual'] = final_df['Qty_Manual'].round(3)
         final_df['Selisih'] = final_df['Qty_SAP'] - final_df['Qty_Manual']
 
         # --- TAMPILAN ---
-        st.success(f"✅ Sukses! Perhitungan kolom kembar sudah diperbaiki.")
+        st.success(f"✅ Sukses! Data berhasil diproses.")
         
         display_cols = ['Line', 'Kategori', 'Material', 'Qty_SAP', 'Qty_Manual', 'Selisih']
         df_show = final_df[display_cols].sort_values(by=['Kategori', 'Line', 'Material'])
@@ -210,4 +213,5 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         st.metric("Total Selisih Global", f"{total_selisih:,.2f}")
 
     except Exception as e:
-        st.error(f"Terjadi kesalahan: {e}")
+        st.error(f"Terjadi kesalahan teknis: {e}")
+        st.warning("Tips: Cek apakah ada kolom kosong yang ter-block saat copy data.")
