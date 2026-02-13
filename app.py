@@ -104,7 +104,7 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         # 3. DETEKSI KOLOM MB51 & MAPPING
         # Cari kolom MB51
         col_mat = find_column(df_mb51, ['Material', 'Material Number', 'Matnr'])
-        col_io_a = find_column(df_mb51, ['Order', 'IO', 'Aufnr'])
+        col_io_a = find_column(df_mb51, ['Reference', 'Order', 'IO', 'Aufnr'])
         col_qty = find_column(df_mb51, ['Quantity', 'Qty', 'Menge'])
         
         # Cari kolom Mapping
@@ -202,4 +202,5 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
     except Exception as e:
         st.error(f"Terjadi kesalahan saat memproses data: {e}")
         st.warning("Tips: Pastikan saat copy dari SAP, header kolom ikut terbawa.")
+
 
