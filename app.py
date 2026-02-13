@@ -36,16 +36,12 @@ def read_paste_data(text_input):
     except Exception: return None
 
 def get_last_two_words(text):
-    """
-    Logika Pembersih Nama Line:
-    Input: "A05022-GD A Sektor 05 LINE 22"
-    Output: "LINE 22"
-    """
+    """Ambil 2 kata terakhir dari nama Line"""
     text = str(text).strip()
-    words = text.split() # Pecah kalimat jadi kata-kata
+    words = text.split()
     if len(words) >= 2:
-        return ' '.join(words[-2:]) # Ambil 2 kata terakhir gabung lagi
-    return text # Kalau cuma 1 kata, kembalikan apa adanya
+        return ' '.join(words[-2:]) 
+    return text 
 
 def find_column(df, keywords):
     df_cols = [c.lower().strip() for c in df.columns]
@@ -64,7 +60,7 @@ def categorize_line(line_name):
     return "BS Depan" if match else "BS Belakang"
 
 # --- 4. JUDUL ---
-st.title("⚡ SAP Reconcile: Auto Clean Line Name")
+st.title("⚡ SAP Reconcile: Final Precision Fix")
 st.markdown("---")
 
 # --- 5. AREA INPUT ---
@@ -79,7 +75,7 @@ with tab2:
     txt_mapping = st.text_area("Paste Data Mapping:", height=200, key="ozppr")
 
 with tab3:
-    st.caption("Data Manual (Kolom Kembar akan otomatis dijumlahkan)")
+    st.caption("Data Manual (Kolom Kembar akan otomatis dijumlahkan dengan BENAR)")
     txt_manual = st.text_area("Paste Data Manual:", height=200, key="manual")
 
 # --- 6. PROSES ---
@@ -94,7 +90,7 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         df_mb51 = read_paste_data(txt_mb51)
         df_mapping = read_paste_data(txt_mapping)
         
-        # BACA DATA MANUAL (Header Duplicate Handling)
+        # BACA DATA MANUAL
         raw_manual_io = StringIO(txt_manual)
         df_manual_raw = pd.read_csv(raw_manual_io, sep='\t')
 
@@ -126,14 +122,14 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         df_mb51['IO'] = df_mb51['IO'].astype(str).str.strip()
         df_mapping['IO'] = df_mapping['IO'].astype(str).str.strip()
         
-        # [FITUR BARU] PEMBERSIH NAMA LINE (AMBIL 2 KATA TERAKHIR)
+        # Clean Nama Line
         df_mapping['Line'] = df_mapping['Line'].apply(get_last_two_words)
 
-        # Format Angka Indo & Filter Material (40/70)
+        # Format Angka & Filter
         df_mb51['Qty'] = df_mb51['Qty'].apply(clean_indo_number).fillna(0)
         df_mb51_clean = df_mb51[df_mb51['Material'].str.startswith(('40', '70'))].copy()
 
-        # Join Line & Grouping SAP
+        # Join & Grouping SAP
         df_merged = pd.merge(df_mb51_clean, df_mapping[['IO', 'Line']], on='IO', how='left')
         df_merged['Line'] = df_merged['Line'].fillna('Unknown Line')
 
@@ -141,16 +137,9 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         sap_grouped.rename(columns={'Qty': 'Qty_SAP'}, inplace=True)
         sap_grouped['Kategori'] = sap_grouped['Line'].apply(categorize_line)
 
-        # --- CLEANING DATA MANUAL ---
+        # --- CLEANING DATA MANUAL (PERBAIKAN LOGIKA DISINI) ---
         
-        # 1. Bersihkan Nama Kolom (Duplicate Handling)
-        clean_cols = []
-        for col in df_manual_raw.columns:
-            col_clean = re.sub(r'\.\d+$', '', col) 
-            clean_cols.append(col_clean)
-        df_manual_raw.columns = clean_cols 
-        
-        # 2. Cari Kolom Line
+        # 1. Cari Kolom Line dulu
         found_line_col = False
         for i, col in enumerate(df_manual_raw.columns):
             if 'line' in col.lower():
@@ -169,14 +158,23 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
                 st.error("Gagal mendeteksi kolom Line di data manual.")
                 st.stop()
 
-        # 3. Sum Kolom Kembar
+        # 2. Set Index Line
         df_manual_raw = df_manual_raw.set_index('Line')
-        valid_data_cols = [col for col in df_manual_raw.columns]
-        df_manual_numeric = df_manual_raw[valid_data_cols].applymap(clean_indo_number).fillna(0)
-        df_manual_grouped = df_manual_numeric.groupby(level=0, axis=1).sum()
+        
+        # 3. Siapkan "Kunci Grouping" (Membersihkan suffix .1, .2 TANPA rename dataframe dulu)
+        # Ini mencegah duplikasi data saat selection
+        group_keys = [re.sub(r'\.\d+$', '', col) for col in df_manual_raw.columns]
+        
+        # 4. Konversi ke Angka
+        df_manual_numeric = df_manual_raw.applymap(clean_indo_number).fillna(0)
+        
+        # 5. Group by Keys (Jumlahkan kolom berdasarkan nama bersihnya)
+        df_manual_grouped = df_manual_numeric.groupby(group_keys, axis=1).sum()
+        
+        # Reset Index
         df_manual_grouped = df_manual_grouped.reset_index()
 
-        # 4. Unpivot
+        # 6. Unpivot
         manual_long = pd.melt(df_manual_grouped, id_vars=['Line'], var_name='Material', value_name='Qty_Manual')
         manual_long['Material'] = manual_long['Material'].astype(str).str.strip()
         manual_long['Line'] = manual_long['Line'].astype(str).str.strip()
@@ -186,16 +184,20 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         final_df['Qty_SAP'] = final_df['Qty_SAP'].fillna(0)
         final_df['Qty_Manual'] = final_df['Qty_Manual'].fillna(0)
         final_df['Kategori'] = final_df['Kategori'].fillna(final_df['Line'].apply(categorize_line))
+        
+        # Toleransi float (pembulatan 2 desimal agar 0.000001 tidak dianggap selisih)
+        final_df['Qty_SAP'] = final_df['Qty_SAP'].round(3)
+        final_df['Qty_Manual'] = final_df['Qty_Manual'].round(3)
         final_df['Selisih'] = final_df['Qty_SAP'] - final_df['Qty_Manual']
 
         # --- TAMPILAN ---
-        st.success(f"✅ Sukses! Nama Line panjang sudah dipotong (ambil 2 kata terakhir).")
+        st.success(f"✅ Sukses! Perhitungan kolom kembar sudah diperbaiki.")
         
         display_cols = ['Line', 'Kategori', 'Material', 'Qty_SAP', 'Qty_Manual', 'Selisih']
         df_show = final_df[display_cols].sort_values(by=['Kategori', 'Line', 'Material'])
 
         def color_diff(val):
-            return 'color: red; font-weight: bold;' if abs(val) > 0.001 else 'color: green;'
+            return 'color: red; font-weight: bold;' if abs(val) > 0.01 else 'color: green;'
 
         st.dataframe(
             df_show.style.applymap(color_diff, subset=['Selisih'])
