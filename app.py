@@ -5,6 +5,27 @@ from io import StringIO
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="SAP Fast Reconcile", layout="wide")
+# --- HILANGKAN NAVBAR & FOOTER ---
+hide_streamlit_style = """
+            <style>
+            /* Menghilangkan Header Atas (Navbar) */
+            header {visibility: hidden;}
+            [data-testid="stHeader"] {display: none;}
+            
+            /* Menghilangkan Footer Bawah */
+            footer {visibility: hidden;}
+            
+            /* Menghilangkan Menu Hamburger (Garis Tiga) & Tombol Deploy */
+            #MainMenu {visibility: hidden;}
+            .stDeployButton {display: none;}
+            
+            /* Menyesuaikan padding atas agar tidak ada celah kosong */
+            .block-container {
+                padding-top: 0rem;
+            }
+            </style>
+            """
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # --- CSS SEDERHANA AGAR TAMPILAN LEBIH LUAS ---
 st.markdown("""
@@ -181,3 +202,4 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
     except Exception as e:
         st.error(f"Terjadi kesalahan saat memproses data: {e}")
         st.warning("Tips: Pastikan saat copy dari SAP, header kolom ikut terbawa.")
+
