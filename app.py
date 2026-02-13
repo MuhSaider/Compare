@@ -25,6 +25,8 @@ st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 def clean_indo_number(x):
     """Format angka Indo (Koma) ke Python (Titik)"""
     if isinstance(x, str):
+        # Hapus spasi yang mungkin terbawa
+        x = x.strip()
         x = x.replace('.', '') # Hapus pemisah ribuan
         x = x.replace(',', '.') # Ganti koma jadi titik
     return pd.to_numeric(x, errors='coerce')
@@ -32,7 +34,7 @@ def clean_indo_number(x):
 def read_paste_data(text_input):
     if not text_input: return None
     try:
-        # engine='python' lebih kuat menangani error parsing
+        # PENTING: sep='\t' wajib agar nama barang berspasi tidak pecah
         return pd.read_csv(StringIO(text_input), sep='\t', engine='python')
     except Exception: return None
 
@@ -60,14 +62,14 @@ def categorize_line(line_name):
     return "BS Depan" if match else "BS Belakang"
 
 # --- 4. JUDUL ---
-st.title("⚡ SAP Reconcile: Anti-Ghost Column")
+st.title("⚡ SAP Reconcile: Final Fix")
 st.markdown("---")
 
 # --- 5. AREA INPUT ---
 tab1, tab2, tab3 = st.tabs(["1️⃣ Paste MB51 (Produksi)", "2️⃣ Paste OZPPR (Mapping)", "3️⃣ Paste Data Manual"])
 
 with tab1:
-    st.caption("Header Wajib: Material, Order/Reference, Qty")
+    st.caption("Copy LANGSUNG dari SAP/Excel (Jangan dari WA). Header: Material, Reference/Order, Qty")
     txt_mb51 = st.text_area("Paste Data MB51:", height=200, key="mb51")
 
 with tab2:
@@ -75,7 +77,7 @@ with tab2:
     txt_mapping = st.text_area("Paste Data Mapping:", height=200, key="ozppr")
 
 with tab3:
-    st.caption("Data Manual (Otomatis handle kolom kembar & kolom kosong)")
+    st.caption("Data Manual (Kolom Kembar & Kolom Kosong Aman)")
     txt_manual = st.text_area("Paste Data Manual:", height=200, key="manual")
 
 # --- 6. PROSES ---
@@ -90,9 +92,15 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         df_mb51 = read_paste_data(txt_mb51)
         df_mapping = read_paste_data(txt_mapping)
         
-        # BACA DATA MANUAL
+        # MANUAL DATA READER (ANTI-MESSY)
         raw_manual_io = StringIO(txt_manual)
-        df_manual_raw = pd.read_csv(raw_manual_io, sep='\t')
+        
+        # Coba baca dengan Tab delimiter
+        try:
+            df_manual_raw = pd.read_csv(raw_manual_io, sep='\t', engine='python')
+        except:
+            st.error("Format Data Manual Salah. Pastikan Copy dari Excel, bukan Text/WA.")
+            st.stop()
 
         if df_manual_raw is None or df_manual_raw.empty:
             st.error("Gagal membaca Data Manual.")
@@ -106,7 +114,6 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         col_io_b = find_column(df_mapping, ['Order', 'IO', 'Reference'])
         col_line = find_column(df_mapping, ['Line', 'Work Center'])
 
-        # Validasi
         missing = []
         if not col_mat: missing.append("Material (MB51)")
         if not col_io_a: missing.append("Reference/Order (MB51)")
@@ -115,7 +122,7 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         if not col_line: missing.append("Line (Mapping)")
 
         if missing:
-            st.error(f"Kolom hilang: {', '.join(missing)}")
+            st.error(f"Kolom hilang: {', '.join(missing)}. Cek apakah data dipisah dengan TAB?")
             st.stop()
 
         # --- CLEANING DATA SAP ---
@@ -126,14 +133,11 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         df_mb51['IO'] = df_mb51['IO'].astype(str).str.strip()
         df_mapping['IO'] = df_mapping['IO'].astype(str).str.strip()
         
-        # Clean Nama Line
         df_mapping['Line'] = df_mapping['Line'].apply(get_last_two_words)
 
-        # Format Angka & Filter
         df_mb51['Qty'] = df_mb51['Qty'].apply(clean_indo_number).fillna(0)
         df_mb51_clean = df_mb51[df_mb51['Material'].str.startswith(('40', '70'))].copy()
 
-        # Join & Grouping SAP
         df_merged = pd.merge(df_mb51_clean, df_mapping[['IO', 'Line']], on='IO', how='left')
         df_merged['Line'] = df_merged['Line'].fillna('Unknown Line')
 
@@ -141,9 +145,9 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         sap_grouped.rename(columns={'Qty': 'Qty_SAP'}, inplace=True)
         sap_grouped['Kategori'] = sap_grouped['Line'].apply(categorize_line)
 
-        # --- CLEANING DATA MANUAL (FIX ERROR LEN INDEX) ---
+        # --- CLEANING DATA MANUAL ---
         
-        # 1. Cari Kolom Line & Rename
+        # 1. Cari Kolom Line
         found_line_col = False
         target_col_name = None
         for col in df_manual_raw.columns:
@@ -160,26 +164,22 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
                 st.error("Gagal mendeteksi kolom 'Line'.")
                 st.stop()
 
-        # 2. Set Index
+        # 2. Hapus Kolom Hantu (Unnamed) & Set Index
         df_manual_raw = df_manual_raw.set_index('Line')
-        
-        # 3. HAPUS KOLOM HANTU (Unnamed) -> Ini FIX-nya
-        # Kita hanya ambil kolom yang TIDAK mengandung kata 'Unnamed'
         valid_cols = [c for c in df_manual_raw.columns if 'Unnamed' not in str(c)]
         df_manual_clean = df_manual_raw[valid_cols].copy()
         
-        # 4. Generate Group Keys dari kolom yang SUDAH BERSIH
+        # 3. Group Keys (Bersihkan .1, .2)
         group_keys = [re.sub(r'\.\d+$', '', col) for col in df_manual_clean.columns]
         
-        # 5. Konversi Angka
+        # 4. Konversi ke Angka
         df_manual_numeric = df_manual_clean.applymap(clean_indo_number).fillna(0)
         
-        # 6. Group by Keys
-        # Sekarang panjang keys PASTI sama dengan panjang kolom karena diambil dari sumber yg sama
+        # 5. Group & Sum
         df_manual_grouped = df_manual_numeric.groupby(group_keys, axis=1).sum()
         df_manual_grouped = df_manual_grouped.reset_index()
 
-        # 7. Unpivot
+        # 6. Unpivot
         manual_long = pd.melt(df_manual_grouped, id_vars=['Line'], var_name='Material', value_name='Qty_Manual')
         manual_long['Material'] = manual_long['Material'].astype(str).str.strip()
         manual_long['Line'] = manual_long['Line'].astype(str).str.strip()
@@ -190,13 +190,12 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         final_df['Qty_Manual'] = final_df['Qty_Manual'].fillna(0)
         final_df['Kategori'] = final_df['Kategori'].fillna(final_df['Line'].apply(categorize_line))
         
-        # Hitung Selisih
         final_df['Qty_SAP'] = final_df['Qty_SAP'].round(3)
         final_df['Qty_Manual'] = final_df['Qty_Manual'].round(3)
         final_df['Selisih'] = final_df['Qty_SAP'] - final_df['Qty_Manual']
 
         # --- TAMPILAN ---
-        st.success(f"✅ Sukses! Data berhasil diproses.")
+        st.success(f"✅ Sukses! Data Valid.")
         
         display_cols = ['Line', 'Kategori', 'Material', 'Qty_SAP', 'Qty_Manual', 'Selisih']
         df_show = final_df[display_cols].sort_values(by=['Kategori', 'Line', 'Material'])
