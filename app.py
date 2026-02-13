@@ -32,12 +32,11 @@ def clean_indo_number(x):
 def read_paste_data(text_input):
     if not text_input: return None
     try:
-        # Gunakan engine python agar lebih robust menangani error baris
+        # engine='python' lebih kuat menangani error parsing
         return pd.read_csv(StringIO(text_input), sep='\t', engine='python')
     except Exception: return None
 
 def get_last_two_words(text):
-    """Ambil 2 kata terakhir dari nama Line"""
     text = str(text).strip()
     words = text.split()
     if len(words) >= 2:
@@ -61,7 +60,7 @@ def categorize_line(line_name):
     return "BS Depan" if match else "BS Belakang"
 
 # --- 4. JUDUL ---
-st.title("⚡ SAP Reconcile: Final Stable Version")
+st.title("⚡ SAP Reconcile: Anti-Ghost Column")
 st.markdown("---")
 
 # --- 5. AREA INPUT ---
@@ -72,11 +71,11 @@ with tab1:
     txt_mb51 = st.text_area("Paste Data MB51:", height=200, key="mb51")
 
 with tab2:
-    st.caption("Header Wajib: Order, Line (Isi Line boleh panjang, nanti dipotong otomatis)")
+    st.caption("Header Wajib: Order, Line")
     txt_mapping = st.text_area("Paste Data Mapping:", height=200, key="ozppr")
 
 with tab3:
-    st.caption("Data Manual (Kolom Kembar akan otomatis dijumlahkan dengan BENAR)")
+    st.caption("Data Manual (Otomatis handle kolom kembar & kolom kosong)")
     txt_manual = st.text_area("Paste Data Manual:", height=200, key="manual")
 
 # --- 6. PROSES ---
@@ -91,12 +90,12 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         df_mb51 = read_paste_data(txt_mb51)
         df_mapping = read_paste_data(txt_mapping)
         
-        # BACA DATA MANUAL (Tanpa engine python agar duplicate cols terhandle otomatis)
+        # BACA DATA MANUAL
         raw_manual_io = StringIO(txt_manual)
         df_manual_raw = pd.read_csv(raw_manual_io, sep='\t')
 
         if df_manual_raw is None or df_manual_raw.empty:
-            st.error("Gagal membaca Data Manual. Pastikan Anda meng-copy tabel dengan benar.")
+            st.error("Gagal membaca Data Manual.")
             st.stop()
 
         # --- DETEKSI KOLOM SAP ---
@@ -142,12 +141,11 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         sap_grouped.rename(columns={'Qty': 'Qty_SAP'}, inplace=True)
         sap_grouped['Kategori'] = sap_grouped['Line'].apply(categorize_line)
 
-        # --- CLEANING DATA MANUAL (SAFE MODE) ---
+        # --- CLEANING DATA MANUAL (FIX ERROR LEN INDEX) ---
         
-        # 1. Cari Kolom Line (Metode Rename Aman)
+        # 1. Cari Kolom Line & Rename
         found_line_col = False
         target_col_name = None
-        
         for col in df_manual_raw.columns:
             if 'line' in col.lower():
                 target_col_name = col
@@ -156,28 +154,32 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         if target_col_name:
             df_manual_raw = df_manual_raw.rename(columns={target_col_name: 'Line'})
         else:
-            # Fallback: Ambil kolom ke-2 jika ada
             if len(df_manual_raw.columns) > 1:
-                col_at_index_1 = df_manual_raw.columns[1]
-                df_manual_raw = df_manual_raw.rename(columns={col_at_index_1: 'Line'})
+                df_manual_raw = df_manual_raw.rename(columns={df_manual_raw.columns[1]: 'Line'})
             else:
-                st.error("Gagal mendeteksi kolom 'Line' di Data Manual. Pastikan ada header 'Line'.")
+                st.error("Gagal mendeteksi kolom 'Line'.")
                 st.stop()
 
-        # 2. Set Index Line
+        # 2. Set Index
         df_manual_raw = df_manual_raw.set_index('Line')
         
-        # 3. Kunci Grouping (Membersihkan suffix .1, .2)
-        group_keys = [re.sub(r'\.\d+$', '', col) for col in df_manual_raw.columns]
+        # 3. HAPUS KOLOM HANTU (Unnamed) -> Ini FIX-nya
+        # Kita hanya ambil kolom yang TIDAK mengandung kata 'Unnamed'
+        valid_cols = [c for c in df_manual_raw.columns if 'Unnamed' not in str(c)]
+        df_manual_clean = df_manual_raw[valid_cols].copy()
         
-        # 4. Konversi ke Angka
-        df_manual_numeric = df_manual_raw.applymap(clean_indo_number).fillna(0)
+        # 4. Generate Group Keys dari kolom yang SUDAH BERSIH
+        group_keys = [re.sub(r'\.\d+$', '', col) for col in df_manual_clean.columns]
         
-        # 5. Group by Keys
+        # 5. Konversi Angka
+        df_manual_numeric = df_manual_clean.applymap(clean_indo_number).fillna(0)
+        
+        # 6. Group by Keys
+        # Sekarang panjang keys PASTI sama dengan panjang kolom karena diambil dari sumber yg sama
         df_manual_grouped = df_manual_numeric.groupby(group_keys, axis=1).sum()
         df_manual_grouped = df_manual_grouped.reset_index()
 
-        # 6. Unpivot
+        # 7. Unpivot
         manual_long = pd.melt(df_manual_grouped, id_vars=['Line'], var_name='Material', value_name='Qty_Manual')
         manual_long['Material'] = manual_long['Material'].astype(str).str.strip()
         manual_long['Line'] = manual_long['Line'].astype(str).str.strip()
@@ -214,4 +216,3 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
 
     except Exception as e:
         st.error(f"Terjadi kesalahan teknis: {e}")
-        st.warning("Tips: Cek apakah ada kolom kosong yang ter-block saat copy data.")
