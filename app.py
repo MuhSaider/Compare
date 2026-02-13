@@ -35,27 +35,6 @@ def read_paste_data(text_input):
         return pd.read_csv(StringIO(text_input), sep='\t')
     except Exception: return None
 
-def process_duplicate_columns(df):
-    """
-    Fungsi Sakti: Menggabungkan kolom dengan nama kembar.
-    Misal ada 5 kolom '700002', nilainya akan dijumlahkan jadi 1 kolom '700002'.
-    """
-    # 1. Ambil nama kolom pertama sebagai 'Line' (Kunci grouping)
-    key_col = df.columns[0] 
-    
-    # 2. Transpose (Putar) data agar Kolom jadi Baris sementara
-    # Ini trik paling aman untuk handle kolom kembar di Pandas
-    df = df.set_index(key_col)
-    
-    # 3. Group by Index (Nama Kolom) dan Sum
-    # Axis=1 artinya kita menjumlahkan ke samping (antar kolom)
-    df_grouped = df.groupby(level=0, axis=1).sum()
-    
-    # 4. Kembalikan index 'Line' jadi kolom biasa
-    df_grouped = df_grouped.reset_index()
-    
-    return df_grouped
-
 def find_column(df, keywords):
     df_cols = [c.lower().strip() for c in df.columns]
     for key in keywords:
@@ -73,7 +52,7 @@ def categorize_line(line_name):
     return "BS Depan" if match else "BS Belakang"
 
 # --- 4. JUDUL ---
-st.title("⚡ SAP Reconcile: Auto Merge Columns")
+st.title("⚡ SAP Reconcile: Auto Merge & Fix Duplicates")
 st.markdown("---")
 
 # --- 5. AREA INPUT ---
@@ -88,7 +67,7 @@ with tab2:
     txt_mapping = st.text_area("Paste Data Mapping:", height=200, key="ozppr")
 
 with tab3:
-    st.caption("Data Manual (Kolom Kembar akan otomatis dijumlahkan)")
+    st.caption("Data Manual (Kolom & Baris kembar akan otomatis dijumlahkan)")
     txt_manual = st.text_area("Paste Data Manual:", height=200, key="manual")
 
 # --- 6. PROSES ---
@@ -99,19 +78,13 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         st.stop()
 
     try:
-        # BACA DATA SAP NORMAL
+        # ==========================================
+        # 1. PROSES DATA SAP (MB51 & MAPPING)
+        # ==========================================
         df_mb51 = read_paste_data(txt_mb51)
         df_mapping = read_paste_data(txt_mapping)
         
-        # BACA DATA MANUAL (KHUSUS)
-        # Kita baca header saja dulu untuk cek duplikat
-        # header=None agar pandas tidak bingung, nanti kita set sendiri
-        raw_manual_io = StringIO(txt_manual)
-        
-        # Trik: Baca CSV apa adanya, kolom kembar akan otomatis diberi suffix .1, .2 oleh pandas
-        df_manual_raw = pd.read_csv(raw_manual_io, sep='\t')
-
-        # --- DETEKSI KOLOM SAP ---
+        # Deteksi Kolom SAP
         col_mat = find_column(df_mb51, ['Material', 'Material Number'])
         col_io_a = find_column(df_mb51, ['Reference', 'Order', 'IO', 'Aufnr']) 
         col_qty = find_column(df_mb51, ['Quantity', 'Qty', 'Menge'])
@@ -119,19 +92,11 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         col_io_b = find_column(df_mapping, ['Order', 'IO', 'Reference'])
         col_line = find_column(df_mapping, ['Line', 'Work Center'])
 
-        # Validasi
-        missing = []
-        if not col_mat: missing.append("Material (MB51)")
-        if not col_io_a: missing.append("Reference/Order (MB51)")
-        if not col_qty: missing.append("Qty (MB51)")
-        if not col_io_b: missing.append("Order (Mapping)")
-        if not col_line: missing.append("Line (Mapping)")
-
-        if missing:
-            st.error(f"Kolom hilang: {', '.join(missing)}")
+        if not all([col_mat, col_io_a, col_qty, col_io_b, col_line]):
+            st.error("Gagal mendeteksi kolom SAP/Mapping. Cek Header data Anda.")
             st.stop()
 
-        # --- CLEANING DATA SAP ---
+        # Rename & Clean SAP
         df_mb51 = df_mb51.rename(columns={col_mat: 'Material', col_io_a: 'IO', col_qty: 'Qty'})
         df_mapping = df_mapping.rename(columns={col_io_b: 'IO', col_line: 'Line'})
 
@@ -140,92 +105,97 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         df_mapping['IO'] = df_mapping['IO'].astype(str).str.strip()
         df_mapping['Line'] = df_mapping['Line'].astype(str).str.strip()
 
-        # Format Angka Indo & Filter Material (40/70)
+        # Filter & Convert
         df_mb51['Qty'] = df_mb51['Qty'].apply(clean_indo_number).fillna(0)
         df_mb51_clean = df_mb51[df_mb51['Material'].str.startswith(('40', '70'))].copy()
 
-        # Join Line & Grouping SAP
+        # Join Line SAP
         df_merged = pd.merge(df_mb51_clean, df_mapping[['IO', 'Line']], on='IO', how='left')
         df_merged['Line'] = df_merged['Line'].fillna('Unknown Line')
 
+        # Grouping SAP (Hasil Akhir Sisi Kiri)
         sap_grouped = df_merged.groupby(['Line', 'Material'])['Qty'].sum().reset_index()
         sap_grouped.rename(columns={'Qty': 'Qty_SAP'}, inplace=True)
         sap_grouped['Kategori'] = sap_grouped['Line'].apply(categorize_line)
 
-        # --- CLEANING DATA MANUAL (THE MAGIC PART) ---
+        # ==========================================
+        # 2. PROSES DATA MANUAL (FIXING BUG HERE)
+        # ==========================================
         
-        # 1. Bersihkan Nama Kolom dari suffix (.1, .2) yg dibuat pandas
-        # Contoh: "700002.1" -> "700002"
-        clean_cols = []
-        for col in df_manual_raw.columns:
-            # Regex: Ambil nama depan sebelum titik jika formatnya "Nama.Angka"
-            col_clean = re.sub(r'\.\d+$', '', col) 
-            clean_cols.append(col_clean)
+        # Baca Raw Data Manual
+        raw_manual_io = StringIO(txt_manual)
+        df_manual_raw = pd.read_csv(raw_manual_io, sep='\t')
+
+        # A. FIX NAMA KOLOM KEMBAR (Hapus suffix .1, .2)
+        clean_cols = [re.sub(r'\.\d+$', '', c) for c in df_manual_raw.columns]
+        df_manual_raw.columns = clean_cols
         
-        df_manual_raw.columns = clean_cols # Pasang nama kolom baru yg kembar
-        
-        # 2. Cari kolom 'Line' (Biasanya di kolom ke-2 pada data Anda, setelah Tanggal)
-        # Kita cari kolom yg mengandung kata 'Line'
+        # B. CARI KOLOM LINE
         found_line_col = False
         for i, col in enumerate(df_manual_raw.columns):
             if 'line' in col.lower():
-                # Ubah nama kolom ini jadi 'Line' yang baku
                 cols = list(df_manual_raw.columns)
                 cols[i] = 'Line'
                 df_manual_raw.columns = cols
                 found_line_col = True
                 break
         
+        # Fallback jika tidak ada header 'Line', ambil kolom kedua
         if not found_line_col:
-            # Jika tidak ketemu header 'Line', asumsi kolom ke-2 adalah Line (Sesuai contoh data Anda: TANGGAL, Line, ...)
             cols = list(df_manual_raw.columns)
             if len(cols) > 1:
                 cols[1] = 'Line'
                 df_manual_raw.columns = cols
             else:
-                st.error("Gagal mendeteksi kolom Line di data manual.")
+                st.error("Error: Kolom Line tidak ditemukan di data manual.")
                 st.stop()
 
-        # 3. Set Index 'Line' lalu Bersihkan Angka
-        # Kita buang kolom Tanggal/Lainnya yg tidak perlu, hanya ambil Line dan Material Angka
+        # C. SET INDEX & BERSIHKAN ANGKA
         df_manual_raw = df_manual_raw.set_index('Line')
         
-        # Hapus kolom yg bukan angka/material (misal Tanggal)
-        # Trik: Coba convert ke numerik, kalau error berarti bukan kolom data
-        valid_data_cols = []
-        for col in df_manual_raw.columns:
-            # Cek apakah nama kolomnya berupa angka (Material) atau teks tertentu yg diinginkan
-            # Disini kita ambil semua, nanti yg gagal convert jadi 0
-            valid_data_cols.append(col)
-            
-        df_manual_numeric = df_manual_raw[valid_data_cols].applymap(clean_indo_number).fillna(0)
+        # Konversi semua isi menjadi angka (kecuali index Line)
+        # Kolom teks (misal Tanggal) akan jadi NaN -> 0
+        df_manual_numeric = df_manual_raw.applymap(clean_indo_number).fillna(0)
 
-        # 4. SUM KOLOM KEMBAR (HORIZONTAL)
-        # Ini langkah krusial: menjumlahkan 700002 + 700002 + 700002
-        df_manual_grouped = df_manual_numeric.groupby(level=0, axis=1).sum()
+        # D. PENJUMLAHAN HORIZONTAL (Kolom Kembar)
+        # 700002 + 700002 (Kanan-Kiri)
+        df_manual_grouped_cols = df_manual_numeric.groupby(level=0, axis=1).sum()
+        df_manual_grouped_cols = df_manual_grouped_cols.reset_index()
+
+        # E. UNPIVOT (WIDE TO LONG)
+        manual_long = pd.melt(df_manual_grouped_cols, id_vars=['Line'], var_name='Material', value_name='Qty_Manual')
         
-        # Reset index agar 'Line' kembali jadi kolom
-        df_manual_grouped = df_manual_grouped.reset_index()
-
-        # 5. Unpivot (Wide to Long)
-        manual_long = pd.melt(df_manual_grouped, id_vars=['Line'], var_name='Material', value_name='Qty_Manual')
         manual_long['Material'] = manual_long['Material'].astype(str).str.strip()
         manual_long['Line'] = manual_long['Line'].astype(str).str.strip()
 
-        # --- FINAL MERGE ---
-        final_df = pd.merge(sap_grouped, manual_long, on=['Line', 'Material'], how='outer')
+        # F. PENJUMLAHAN VERTIKAL (Baris Kembar) -> INI PERBAIKANNYA
+        # Line 10 (Tgl 1) + Line 10 (Tgl 2) -> Total Line 10
+        manual_final = manual_long.groupby(['Line', 'Material'], as_index=False)['Qty_Manual'].sum()
+
+        # ==========================================
+        # 3. FINAL MERGE & DISPLAY
+        # ==========================================
+        
+        final_df = pd.merge(sap_grouped, manual_final, on=['Line', 'Material'], how='outer')
+        
+        # Isi NaN dengan 0
         final_df['Qty_SAP'] = final_df['Qty_SAP'].fillna(0)
         final_df['Qty_Manual'] = final_df['Qty_Manual'].fillna(0)
+        
+        # Isi Kategori yang kosong (karena data cuma ada di Manual)
         final_df['Kategori'] = final_df['Kategori'].fillna(final_df['Line'].apply(categorize_line))
+        
+        # Hitung Selisih
         final_df['Selisih'] = final_df['Qty_SAP'] - final_df['Qty_Manual']
 
-        # --- TAMPILAN ---
-        st.success("✅ Sukses! Kolom kembar sudah dijumlahkan otomatis.")
+        # TAMPILAN
+        st.success("✅ Sukses! Data baris & kolom ganda sudah dirapikan.")
         
         display_cols = ['Line', 'Kategori', 'Material', 'Qty_SAP', 'Qty_Manual', 'Selisih']
         df_show = final_df[display_cols].sort_values(by=['Kategori', 'Line', 'Material'])
 
         def color_diff(val):
+            # Merah jika selisih > 0.001 atau < -0.001 (bukan nol)
             return 'color: red; font-weight: bold;' if abs(val) > 0.001 else 'color: green;'
 
         st.dataframe(
@@ -239,5 +209,5 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         st.metric("Total Selisih Global", f"{total_selisih:,.2f}")
 
     except Exception as e:
-        st.error(f"Terjadi kesalahan: {e}")
-        st.write("Cek format data manual Anda. Pastikan copy-paste rapi.")
+        st.error(f"Terjadi kesalahan sistem: {e}")
+        st.write("Tips: Pastikan Header data manual tidak berantakan.")
