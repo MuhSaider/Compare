@@ -190,7 +190,7 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
             # ==================================================
             # FILTER: Hapus baris jika Qty_SAP dan Qty_Manual sama-sama 0
             # ==================================================
-            final_df = final_df[
+        final_df = final_df[
                 ~((final_df['Qty_SAP'] == 0) & (final_df['Qty_Manual'] == 0))
             ]
         # TAMPILAN
@@ -216,4 +216,5 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
     except Exception as e:
         st.error(f"Terjadi kesalahan sistem: {e}")
         st.write("Tips: Pastikan Header data manual tidak berantakan.")
+
 
