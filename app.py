@@ -187,9 +187,14 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         
         # Hitung Selisih
         final_df['Selisih'] = final_df['Qty_SAP'] - final_df['Qty_Manual']
-
+            # ==================================================
+            # FILTER: Hapus baris jika Qty_SAP dan Qty_Manual sama-sama 0
+            # ==================================================
+            final_df = final_df[
+                ~((final_df['Qty_SAP'] == 0) & (final_df['Qty_Manual'] == 0))
+            ]
         # TAMPILAN
-        st.success("✅ Sukses! Data baris & kolom ganda sudah dirapikan.")
+        st.success("✅ Sukses! mantap slur")
         
         display_cols = ['Line', 'Kategori', 'Material', 'Qty_SAP', 'Qty_Manual', 'Selisih']
         df_show = final_df[display_cols].sort_values(by=['Kategori', 'Line', 'Material'])
@@ -211,3 +216,4 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
     except Exception as e:
         st.error(f"Terjadi kesalahan sistem: {e}")
         st.write("Tips: Pastikan Header data manual tidak berantakan.")
+
