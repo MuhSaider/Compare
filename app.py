@@ -100,12 +100,28 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         df_mb51 = read_paste_data(txt_mb51)
         df_mapping = read_paste_data(txt_mapping)
 
-        col_mat = find_column(df_mb51, ['Material'])
-        col_io = find_column(df_mb51, ['Reference', 'Order', 'IO'])
-        col_qty = find_column(df_mb51, ['Quantity', 'Qty'])
+           # ======================================
+        # DETEKSI KOLOM SESUAI HEADER KAMU
+        # ======================================
+        col_mat = find_column(df_mb51, [
+        'Material'
+        ])
 
-        col_map_io = find_column(df_mapping, ['Order', 'IO'])
-        col_line = find_column(df_mapping, ['Line'])
+        col_io = find_column(df_mb51, [
+        'Order'
+        ])
+
+        col_qty = find_column(df_mb51, [
+        'Qty'
+        ])
+
+        col_map_io = find_column(df_mapping, [
+        'Order'
+        ])
+
+        col_line = find_column(df_mapping, [
+        'Work Center'
+        ])
 
         if not all([col_mat, col_io, col_qty, col_map_io, col_line]):
             st.error("Header SAP/Mapping tidak terdeteksi.")
@@ -254,3 +270,4 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
 
     except Exception as e:
         st.error(f"Terjadi kesalahan sistem: {e}")
+
