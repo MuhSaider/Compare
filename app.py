@@ -1,39 +1,46 @@
 import streamlit as st
 import pandas as pd
 import re
-from io import StringIO
+from io import StringIO, BytesIO
 
-# --- 1. KONFIGURASI HALAMAN ---
+# ==============================
+# 1. PAGE CONFIG
+# ==============================
 st.set_page_config(page_title="SAP Fast Reconcile", layout="wide")
 
-# --- 2. CSS RAHASIA ---
+# ==============================
+# 2. HIDE STREAMLIT UI
+# ==============================
 hide_streamlit_style = """
-            <style>
-            header {visibility: hidden;}
-            [data-testid="stHeader"] {display: none;}
-            footer {visibility: hidden;}
-            #MainMenu {visibility: hidden;}
-            .stDeployButton {display: none;}
-            .block-container {padding-top: 1rem;}
-            textarea {font-size: 12px !important; font-family: monospace;}
-            </style>
-            """
+<style>
+header {visibility: hidden;}
+[data-testid="stHeader"] {display: none;}
+footer {visibility: hidden;}
+#MainMenu {visibility: hidden;}
+.stDeployButton {display: none;}
+.block-container {padding-top: 1rem;}
+textarea {font-size: 12px !important; font-family: monospace;}
+</style>
+"""
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# --- 3. FUNGSI HELPER ---
+# ==============================
+# 3. HELPER FUNCTIONS
+# ==============================
 
 def clean_indo_number(x):
-    """Format angka Indo (Koma) ke Python (Titik)"""
     if isinstance(x, str):
-        x = x.replace('.', '') # Hapus pemisah ribuan
-        x = x.replace(',', '.') # Ganti koma jadi titik
+        x = x.replace('.', '')
+        x = x.replace(',', '.')
     return pd.to_numeric(x, errors='coerce')
 
 def read_paste_data(text_input):
-    if not text_input: return None
+    if not text_input:
+        return None
     try:
         return pd.read_csv(StringIO(text_input), sep='\t')
-    except Exception: return None
+    except:
+        return None
 
 def find_column(df, keywords):
     df_cols = [c.lower().strip() for c in df.columns]
@@ -47,200 +54,152 @@ def find_column(df, keywords):
     return None
 
 def categorize_line(line_name):
-    if not isinstance(line_name, str): return "BS Belakang"
+    if not isinstance(line_name, str):
+        return "BS Belakang"
     match = re.search(r'LINE\s*(0[1-9]|[1-2][0-9]|3[0-6])\b', line_name.upper())
     return "BS Depan" if match else "BS Belakang"
 
-# --- 4. JUDUL ---
-st.title("⚡ SAP Reconcile: Auto Merge & Fix Duplicates")
+# ==============================
+# 4. TITLE
+# ==============================
+st.title("⚡ SAP Reconcile - Production vs Timbangan")
 st.markdown("---")
 
-# --- 5. AREA INPUT ---
-tab1, tab2, tab3 = st.tabs(["1️⃣ Paste MB51 (Produksi)", "2️⃣ Paste OZPPR (Mapping)", "3️⃣ Paste Data Manual"])
+# ==============================
+# 5. INPUT AREA
+# ==============================
+tab1, tab2, tab3 = st.tabs([
+    "1️⃣ Paste MB51 (Produksi)",
+    "2️⃣ Paste OZPPR (Mapping)",
+    "3️⃣ Paste Data Manual"
+])
 
 with tab1:
-    st.caption("Header Wajib: Material, Order/Reference, Qty")
-    txt_mb51 = st.text_area("Paste Data MB51:", height=200, key="mb51")
+    txt_mb51 = st.text_area("Paste Data MB51:", height=200)
 
 with tab2:
-    st.caption("Header Wajib: Order, Line")
-    txt_mapping = st.text_area("Paste Data Mapping:", height=200, key="ozppr")
+    txt_mapping = st.text_area("Paste Data Mapping:", height=200)
 
 with tab3:
-    st.caption("Data Manual (Kolom & Baris kembar akan otomatis dijumlahkan)")
-    txt_manual = st.text_area("Paste Data Manual:", height=200, key="manual")
+    txt_manual = st.text_area("Paste Data Manual:", height=200)
 
-# --- 6. PROSES ---
+# ==============================
+# 6. PROCESS BUTTON
+# ==============================
 if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=True):
-    
+
     if not txt_mb51 or not txt_mapping or not txt_manual:
-        st.error("⚠️ Data belum lengkap!")
+        st.error("⚠️ Semua data wajib diisi!")
         st.stop()
 
     try:
-        # ==========================================
-        # 1. PROSES DATA SAP (MB51 & MAPPING)
-        # ==========================================
+
+        # ======================================
+        # PROCESS SAP
+        # ======================================
         df_mb51 = read_paste_data(txt_mb51)
         df_mapping = read_paste_data(txt_mapping)
-        
-        # Deteksi Kolom SAP
-        col_mat = find_column(df_mb51, ['Material', 'Material Number'])
-        col_io_a = find_column(df_mb51, ['Reference', 'Order', 'IO', 'Aufnr']) 
-        col_qty = find_column(df_mb51, ['Quantity', 'Qty', 'Menge'])
-        
-        col_io_b = find_column(df_mapping, ['Order', 'IO', 'Reference'])
-        col_line = find_column(df_mapping, ['Line', 'Work Center'])
 
-        if not all([col_mat, col_io_a, col_qty, col_io_b, col_line]):
-            st.error("Gagal mendeteksi kolom SAP/Mapping. Cek Header data Anda.")
+        col_mat = find_column(df_mb51, ['Material'])
+        col_io = find_column(df_mb51, ['Reference', 'Order', 'IO'])
+        col_qty = find_column(df_mb51, ['Quantity', 'Qty'])
+
+        col_map_io = find_column(df_mapping, ['Order', 'IO'])
+        col_line = find_column(df_mapping, ['Line'])
+
+        if not all([col_mat, col_io, col_qty, col_map_io, col_line]):
+            st.error("Header SAP/Mapping tidak terdeteksi.")
             st.stop()
 
-        # Rename & Clean SAP
-        df_mb51 = df_mb51.rename(columns={col_mat: 'Material', col_io_a: 'IO', col_qty: 'Qty'})
-        df_mapping = df_mapping.rename(columns={col_io_b: 'IO', col_line: 'Line'})
+        df_mb51 = df_mb51.rename(columns={
+            col_mat: 'Material',
+            col_io: 'IO',
+            col_qty: 'Qty'
+        })
 
-        df_mb51['Material'] = df_mb51['Material'].astype(str).str.strip()
-        df_mb51['IO'] = df_mb51['IO'].astype(str).str.strip()
-        df_mapping['IO'] = df_mapping['IO'].astype(str).str.strip()
-        df_mapping['Line'] = df_mapping['Line'].astype(str).str.strip()
+        df_mapping = df_mapping.rename(columns={
+            col_map_io: 'IO',
+            col_line: 'Line'
+        })
 
-        # Filter & Convert
         df_mb51['Qty'] = df_mb51['Qty'].apply(clean_indo_number).fillna(0)
-        df_mb51_clean = df_mb51[df_mb51['Material'].str.startswith(('40', '70'))].copy()
+        df_mb51['Material'] = df_mb51['Material'].astype(str).str.strip()
 
-        # Join Line SAP
-        df_merged = pd.merge(df_mb51_clean, df_mapping[['IO', 'Line']], on='IO', how='left')
-        df_merged['Line'] = df_merged['Line'].fillna('Unknown Line')
+        df_merge = pd.merge(df_mb51, df_mapping[['IO','Line']], on='IO', how='left')
+        df_merge['Line'] = df_merge['Line'].fillna("Unknown")
 
-        # Grouping SAP (Hasil Akhir Sisi Kiri)
-        sap_grouped = df_merged.groupby(['Line', 'Material'])['Qty'].sum().reset_index()
-        sap_grouped.rename(columns={'Qty': 'Qty_SAP'}, inplace=True)
-        sap_grouped['Kategori'] = sap_grouped['Line'].apply(categorize_line)
+        sap_grouped = df_merge.groupby(['Material','Line'], as_index=False)['Qty'].sum()
+        sap_grouped.rename(columns={'Qty':'QTY GR PRD'}, inplace=True)
 
-        # ==========================================
-        # 2. PROSES DATA MANUAL (FIXING BUG HERE)
-        # ==========================================
-        
-        # Baca Raw Data Manual
-        raw_manual_io = StringIO(txt_manual)
-        df_manual_raw = pd.read_csv(raw_manual_io, sep='\t')
+        # ======================================
+        # PROCESS MANUAL
+        # ======================================
+        df_manual = pd.read_csv(StringIO(txt_manual), sep='\t')
 
-        # A. FIX NAMA KOLOM KEMBAR (Hapus suffix .1, .2)
-        clean_cols = [re.sub(r'\.\d+$', '', c) for c in df_manual_raw.columns]
-        df_manual_raw.columns = clean_cols
-        
-        # B. CARI KOLOM LINE
-        found_line_col = False
-        for i, col in enumerate(df_manual_raw.columns):
-            if 'line' in col.lower():
-                cols = list(df_manual_raw.columns)
-                cols[i] = 'Line'
-                df_manual_raw.columns = cols
-                found_line_col = True
-                break
-        
-        # Fallback jika tidak ada header 'Line', ambil kolom kedua
-        if not found_line_col:
-            cols = list(df_manual_raw.columns)
-            if len(cols) > 1:
-                cols[1] = 'Line'
-                df_manual_raw.columns = cols
-            else:
-                st.error("Error: Kolom Line tidak ditemukan di data manual.")
-                st.stop()
+        df_manual.columns = [re.sub(r'\.\d+$','',c) for c in df_manual.columns]
 
-        # C. SET INDEX & BERSIHKAN ANGKA
-        df_manual_raw = df_manual_raw.set_index('Line')
-        
-        # Konversi semua isi menjadi angka (kecuali index Line)
-        # Kolom teks (misal Tanggal) akan jadi NaN -> 0
-        df_manual_numeric = df_manual_raw.applymap(clean_indo_number).fillna(0)
+        if 'Line' not in df_manual.columns:
+            df_manual.columns.values[1] = 'Line'
 
-        # D. PENJUMLAHAN HORIZONTAL (Kolom Kembar)
-        # 700002 + 700002 (Kanan-Kiri)
-        df_manual_grouped_cols = df_manual_numeric.groupby(level=0, axis=1).sum()
-        df_manual_grouped_cols = df_manual_grouped_cols.reset_index()
+        df_manual = df_manual.set_index('Line')
+        df_manual = df_manual.applymap(clean_indo_number).fillna(0)
 
-        # E. UNPIVOT (WIDE TO LONG)
-        manual_long = pd.melt(df_manual_grouped_cols, id_vars=['Line'], var_name='Material', value_name='Qty_Manual')
-        
-        manual_long['Material'] = manual_long['Material'].astype(str).str.strip()
-        manual_long['Line'] = manual_long['Line'].astype(str).str.strip()
+        df_manual = df_manual.groupby(level=0, axis=1).sum().reset_index()
 
-        # F. PENJUMLAHAN VERTIKAL (Baris Kembar) -> INI PERBAIKANNYA
-        # Line 10 (Tgl 1) + Line 10 (Tgl 2) -> Total Line 10
-        manual_final = manual_long.groupby(['Line', 'Material'], as_index=False)['Qty_Manual'].sum()
+        manual_long = pd.melt(
+            df_manual,
+            id_vars=['Line'],
+            var_name='Material',
+            value_name='Qty_Manual'
+        )
 
-        # ==========================================
-        # 3. FINAL FORMAT SESUAI REQUEST
-        # ==========================================
+        manual_grouped = manual_long.groupby(
+            ['Material','Line'],
+            as_index=False
+        )['Qty_Manual'].sum()
 
+        # ======================================
+        # FINAL MERGE
+        # ======================================
         final_df = pd.merge(
             sap_grouped,
-            manual_final,
-            on=['Line', 'Material'],
+            manual_grouped,
+            on=['Material','Line'],
             how='outer'
-        )
+        ).fillna(0)
 
-        final_df['Qty_SAP'] = final_df['Qty_SAP'].fillna(0)
-        final_df['Qty_Manual'] = final_df['Qty_Manual'].fillna(0)
-        final_df['Kategori'] = final_df['Kategori'].fillna(
-            final_df['Line'].apply(categorize_line)
-        )
+        final_df['Kategori'] = final_df['Line'].apply(categorize_line)
 
-        # Pisahkan zona
         final_df['QTY POS TIMBANG ZONA DEPAN'] = final_df.apply(
-            lambda x: x['Qty_Manual'] if x['Kategori'] == 'BS Depan' else 0,
-            axis=1
-        )
+            lambda x: x['Qty_Manual'] if x['Kategori']=='BS Depan' else 0, axis=1)
 
         final_df['QTY POS TIMBANG ZONA BELAKANG'] = final_df.apply(
-            lambda x: x['Qty_Manual'] if x['Kategori'] == 'BS Belakang' else 0,
-            axis=1
-        )
+            lambda x: x['Qty_Manual'] if x['Kategori']=='BS Belakang' else 0, axis=1)
 
-        # Group ulang
-        grouped_final = final_df.groupby(
-            ['Material', 'Line'],
-            as_index=False
-        ).agg({
-            'Qty_SAP': 'sum',
-            'QTY POS TIMBANG ZONA DEPAN': 'sum',
-            'QTY POS TIMBANG ZONA BELAKANG': 'sum'
+        grouped = final_df.groupby(['Material','Line'],as_index=False).agg({
+            'QTY GR PRD':'sum',
+            'QTY POS TIMBANG ZONA DEPAN':'sum',
+            'QTY POS TIMBANG ZONA BELAKANG':'sum'
         })
 
-        # Hitung total
-        grouped_final['TOTAL POST TIMBANG'] = (
-            grouped_final['QTY POS TIMBANG ZONA DEPAN'] +
-            grouped_final['QTY POS TIMBANG ZONA BELAKANG']
+        grouped['TOTAL POST TIMBANG'] = (
+            grouped['QTY POS TIMBANG ZONA DEPAN'] +
+            grouped['QTY POS TIMBANG ZONA BELAKANG']
         )
 
-        grouped_final['GR PRODUKSI'] = grouped_final['Qty_SAP']
+        grouped['GR PRODUKSI'] = grouped['QTY GR PRD']
+        grouped['SELISIH'] = grouped['GR PRODUKSI'] - grouped['TOTAL POST TIMBANG']
 
-        grouped_final['SELISIH'] = (
-            grouped_final['GR PRODUKSI'] -
-            grouped_final['TOTAL POST TIMBANG']
-        )
+        grouped['Material Description'] = ''
+        grouped['Reference'] = ''
+        grouped['SKU'] = ''
 
-        # Tambah kolom dummy
-        grouped_final['Material Description'] = ''
-        grouped_final['Reference'] = ''
-        grouped_final['SKU'] = ''
-
-        # Rename
-        grouped_final = grouped_final.rename(columns={
-            'Qty_SAP': 'QTY GR PRD',
-            'Line': 'LINE'
-        })
-
-        # Urutkan kolom
-        result = grouped_final[[
+        result = grouped[[
             'Material',
             'Material Description',
             'QTY GR PRD',
             'Reference',
-            'LINE',
+            'Line',
             'SKU',
             'QTY POS TIMBANG ZONA DEPAN',
             'QTY POS TIMBANG ZONA BELAKANG',
@@ -249,16 +208,22 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
             'SELISIH'
         ]]
 
-        # Filter kosong
         result = result[
-            ~((result['QTY GR PRD'] == 0) &
-              (result['TOTAL POST TIMBANG'] == 0))
+            ~((result['QTY GR PRD']==0) &
+              (result['TOTAL POST TIMBANG']==0))
         ]
 
-        st.success("✅ Format Baru Berhasil Dibuat!")
+        # ======================================
+        # DISPLAY
+        # ======================================
+        st.success("✅ Reconcile Berhasil!")
+
+        def highlight(val):
+            return "color:red;font-weight:bold;" if abs(val)>0.001 else "color:green;"
 
         st.dataframe(
-            result.style.format("{:,.2f}", subset=[
+            result.style.applymap(highlight,subset=['SELISIH'])
+            .format("{:,.2f}",subset=[
                 'QTY GR PRD',
                 'QTY POS TIMBANG ZONA DEPAN',
                 'QTY POS TIMBANG ZONA BELAKANG',
@@ -272,3 +237,20 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
 
         st.metric("Total Selisih Global",
                   f"{result['SELISIH'].sum():,.2f}")
+
+        # ======================================
+        # DOWNLOAD EXCEL
+        # ======================================
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            result.to_excel(writer, index=False)
+
+        st.download_button(
+            label="📥 Download Excel",
+            data=output.getvalue(),
+            file_name="SAP_Reconcile_Result.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        st.error(f"Terjadi kesalahan sistem: {e}")
