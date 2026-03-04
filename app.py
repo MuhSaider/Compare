@@ -172,100 +172,103 @@ if st.button("🚀 PROSES DATA SEKARANG", type="primary", use_container_width=Tr
         # Line 10 (Tgl 1) + Line 10 (Tgl 2) -> Total Line 10
         manual_final = manual_long.groupby(['Line', 'Material'], as_index=False)['Qty_Manual'].sum()
 
-       # ==========================================
-# 3. FINAL FORMAT SESUAI REQUEST
-# ==========================================
+        # ==========================================
+        # 3. FINAL FORMAT SESUAI REQUEST
+        # ==========================================
 
-final_df = pd.merge(sap_grouped, manual_final, 
-                    on=['Line', 'Material'], how='outer')
+        final_df = pd.merge(
+            sap_grouped,
+            manual_final,
+            on=['Line', 'Material'],
+            how='outer'
+        )
 
-final_df['Qty_SAP'] = final_df['Qty_SAP'].fillna(0)
-final_df['Qty_Manual'] = final_df['Qty_Manual'].fillna(0)
-final_df['Kategori'] = final_df['Kategori'].fillna(
-    final_df['Line'].apply(categorize_line)
-)
+        final_df['Qty_SAP'] = final_df['Qty_SAP'].fillna(0)
+        final_df['Qty_Manual'] = final_df['Qty_Manual'].fillna(0)
+        final_df['Kategori'] = final_df['Kategori'].fillna(
+            final_df['Line'].apply(categorize_line)
+        )
 
-# Pisahkan Zona Depan & Belakang
-final_df['QTY POS TIMBANG ZONA DEPAN'] = final_df.apply(
-    lambda x: x['Qty_Manual'] if x['Kategori'] == 'BS Depan' else 0,
-    axis=1
-)
+        # Pisahkan zona
+        final_df['QTY POS TIMBANG ZONA DEPAN'] = final_df.apply(
+            lambda x: x['Qty_Manual'] if x['Kategori'] == 'BS Depan' else 0,
+            axis=1
+        )
 
-final_df['QTY POS TIMBANG ZONA BELAKANG'] = final_df.apply(
-    lambda x: x['Qty_Manual'] if x['Kategori'] == 'BS Belakang' else 0,
-    axis=1
-)
+        final_df['QTY POS TIMBANG ZONA BELAKANG'] = final_df.apply(
+            lambda x: x['Qty_Manual'] if x['Kategori'] == 'BS Belakang' else 0,
+            axis=1
+        )
 
-# Group ulang supaya material yang sama dijumlahkan per line
-grouped_final = final_df.groupby(
-    ['Material', 'Line'], as_index=False
-).agg({
-    'Qty_SAP': 'sum',
-    'QTY POS TIMBANG ZONA DEPAN': 'sum',
-    'QTY POS TIMBANG ZONA BELAKANG': 'sum'
-})
+        # Group ulang
+        grouped_final = final_df.groupby(
+            ['Material', 'Line'],
+            as_index=False
+        ).agg({
+            'Qty_SAP': 'sum',
+            'QTY POS TIMBANG ZONA DEPAN': 'sum',
+            'QTY POS TIMBANG ZONA BELAKANG': 'sum'
+        })
 
-# Hitung Total
-grouped_final['TOTAL POST TIMBANG'] = (
-    grouped_final['QTY POS TIMBANG ZONA DEPAN'] +
-    grouped_final['QTY POS TIMBANG ZONA BELAKANG']
-)
+        # Hitung total
+        grouped_final['TOTAL POST TIMBANG'] = (
+            grouped_final['QTY POS TIMBANG ZONA DEPAN'] +
+            grouped_final['QTY POS TIMBANG ZONA BELAKANG']
+        )
 
-grouped_final['GR PRODUKSI'] = grouped_final['Qty_SAP']
-grouped_final['SELISIH'] = (
-    grouped_final['GR PRODUKSI'] -
-    grouped_final['TOTAL POST TIMBANG']
-)
+        grouped_final['GR PRODUKSI'] = grouped_final['Qty_SAP']
 
-# Tambah kolom dummy sesuai format
-grouped_final['Material Description'] = ''
-grouped_final['Reference'] = ''
-grouped_final['SKU'] = ''
+        grouped_final['SELISIH'] = (
+            grouped_final['GR PRODUKSI'] -
+            grouped_final['TOTAL POST TIMBANG']
+        )
 
-# Susun sesuai urutan yang kamu mau
-result = grouped_final[[
-    'Material',
-    'Material Description',
-    'Qty_SAP',
-    'Reference',
-    'Line',
-    'SKU',
-    'Material',
-    'Material Description',
-    'Line',
-    'QTY POS TIMBANG ZONA DEPAN',
-    'QTY POS TIMBANG ZONA BELAKANG',
-    'TOTAL POST TIMBANG',
-    'GR PRODUKSI',
-    'SELISIH'
-]]
+        # Tambah kolom dummy
+        grouped_final['Material Description'] = ''
+        grouped_final['Reference'] = ''
+        grouped_final['SKU'] = ''
 
-# Rename Qty_SAP jadi QTY GR PRD
-result = result.rename(columns={
-    'Qty_SAP': 'QTY GR PRD',
-    'Line': 'LINE'
-})
+        # Rename
+        grouped_final = grouped_final.rename(columns={
+            'Qty_SAP': 'QTY GR PRD',
+            'Line': 'LINE'
+        })
 
-# Filter baris kosong total
-result = result[
-    ~((result['QTY GR PRD'] == 0) &
-      (result['TOTAL POST TIMBANG'] == 0))
-]
+        # Urutkan kolom
+        result = grouped_final[[
+            'Material',
+            'Material Description',
+            'QTY GR PRD',
+            'Reference',
+            'LINE',
+            'SKU',
+            'QTY POS TIMBANG ZONA DEPAN',
+            'QTY POS TIMBANG ZONA BELAKANG',
+            'TOTAL POST TIMBANG',
+            'GR PRODUKSI',
+            'SELISIH'
+        ]]
 
-st.success("✅ Format Baru Berhasil Dibuat!")
+        # Filter kosong
+        result = result[
+            ~((result['QTY GR PRD'] == 0) &
+              (result['TOTAL POST TIMBANG'] == 0))
+        ]
 
-st.dataframe(
-    result.style.format("{:,.2f}", subset=[
-        'QTY GR PRD',
-        'QTY POS TIMBANG ZONA DEPAN',
-        'QTY POS TIMBANG ZONA BELAKANG',
-        'TOTAL POST TIMBANG',
-        'GR PRODUKSI',
-        'SELISIH'
-    ]),
-    use_container_width=True,
-    height=600
-)
+        st.success("✅ Format Baru Berhasil Dibuat!")
 
-st.metric("Total Selisih Global",
-          f"{result['SELISIH'].sum():,.2f}")
+        st.dataframe(
+            result.style.format("{:,.2f}", subset=[
+                'QTY GR PRD',
+                'QTY POS TIMBANG ZONA DEPAN',
+                'QTY POS TIMBANG ZONA BELAKANG',
+                'TOTAL POST TIMBANG',
+                'GR PRODUKSI',
+                'SELISIH'
+            ]),
+            use_container_width=True,
+            height=600
+        )
+
+        st.metric("Total Selisih Global",
+                  f"{result['SELISIH'].sum():,.2f}")
